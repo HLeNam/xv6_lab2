@@ -1,0 +1,15 @@
+fucntion usertrap() called syscall() at line 67 from kernel/trap.c (kernel/trap.c:67)
+
+The value a7 = 0x7 in xv6 corresponds to the syscall number that a process wants to invoke. 
+Specifically:
+a7 = 0x7 is the syscall number for SYS_exec in xv6, meaning that the exec system call will be executed. This syscall is used to replace the current program with a new one.
+
+User mode
+
+num = * (int *) 0;  a3
+
+In the RISC-V system, address 0 is typically not mapped in the page table of the kernel. This means that any attempt to access address 0 will result in a memory access error (segmentation fault).
+In the previous result, the value of scause printed is 0xd. According to the RISC-V definition, this value indicates an invalid memory access error (Load Page Fault).
+The sepc (Saved Program Counter) points to the location of the assembly instruction that caused the error, in this case: lw a3, 0(zero). This is a load instruction that attempts to load a value from address 0, leading to a memory access fault.
+
+name binary file = "p p->pid"  id process = 1
