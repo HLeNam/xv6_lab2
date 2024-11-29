@@ -93,6 +93,20 @@ sys_uptime(void)
   return xticks;
 }
 
+uint64
+sys_trace(void) {
+
+  int n;
+  argint(0, &n);
+
+  if (n < 0)
+    return -1;
+
+  myproc()->tracemask = n;
+
+  return 0;
+}
+
 
  uint64
  sys_sysinfo(void)
