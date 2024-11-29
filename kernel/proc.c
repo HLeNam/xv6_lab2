@@ -693,3 +693,20 @@ procdump(void)
     printf("\n");
   }
 }
+
+uint64
+number_of_proccess(void)
+{
+  uint64 nproc = 0;
+  
+  int i = 0;
+  for (i = 0; i < NPROC; i++) {
+    if (proc[i].state != UNUSED) {
+      nproc++;
+    }
+  }
+
+  // printf("[proc.c] nproc %d\n", (int)nproc);
+
+  return nproc;
+}
