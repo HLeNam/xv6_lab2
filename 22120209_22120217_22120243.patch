@@ -1,0 +1,294 @@
+diff --git a/.vscode/settings.json b/.vscode/settings.json
+new file mode 100644
+index 0000000..ee70e82
+--- /dev/null
++++ b/.vscode/settings.json
+@@ -0,0 +1,5 @@
++{
++    "files.associations": {
++        "proc.h": "c"
++    }
++}
+\ No newline at end of file
+diff --git a/Makefile b/Makefile
+index 74e454f..95710a0 100644
+--- a/Makefile
++++ b/Makefile
+@@ -194,6 +194,8 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
++	$U/_trace\
++	$U/_sysinfotest\
+ 
+ 
+ 
+diff --git a/answer-syscall.txt b/answer-syscall.txt
+new file mode 100644
+index 0000000..cbbf24e
+--- /dev/null
++++ b/answer-syscall.txt
+@@ -0,0 +1,15 @@
++fucntion usertrap() called syscall() at line 67 from kernel/trap.c (kernel/trap.c:67)
++
++The value a7 = 0x7 in xv6 corresponds to the syscall number that a process wants to invoke. 
++Specifically:
++a7 = 0x7 is the syscall number for SYS_exec in xv6, meaning that the exec system call will be executed. This syscall is used to replace the current program with a new one.
++
++User mode
++
++num = * (int *) 0;  a3
++
++In the RISC-V system, address 0 is typically not mapped in the page table of the kernel. This means that any attempt to access address 0 will result in a memory access error (segmentation fault).
++In the previous result, the value of scause printed is 0xd. According to the RISC-V definition, this value indicates an invalid memory access error (Load Page Fault).
++The sepc (Saved Program Counter) points to the location of the assembly instruction that caused the error, in this case: lw a3, 0(zero). This is a load instruction that attempts to load a value from address 0, leading to a memory access fault.
++
++name binary file = "p p->pid"  id process = 1
+\ No newline at end of file
+diff --git a/kernel/defs.h b/kernel/defs.h
+index d1b6bb9..c526972 100644
+--- a/kernel/defs.h
++++ b/kernel/defs.h
+@@ -63,6 +63,7 @@ void            ramdiskrw(struct buf*);
+ void*           kalloc(void);
+ void            kfree(void *);
+ void            kinit(void);
++uint64          free_memory(void);
+ 
+ // log.c
+ void            initlog(int, struct superblock*);
+@@ -106,6 +107,7 @@ void            yield(void);
+ int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
+ int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
+ void            procdump(void);
++uint64          number_of_proccess(void);
+ 
+ // swtch.S
+ void            swtch(struct context*, struct context*);
+diff --git a/kernel/kalloc.c b/kernel/kalloc.c
+index 5247b91..465c2d6 100644
+--- a/kernel/kalloc.c
++++ b/kernel/kalloc.c
+@@ -91,3 +91,24 @@ kalloc(void)
+   return (void*)r;
+ }
+ 
++uint64
++free_memory(void) 
++{
++  uint64 freeMem = 0;
++  struct run *r = kmem.freelist;
++
++  acquire(&kmem.lock);
++
++  while (r)
++  {
++    freeMem += PGSIZE;
++
++    r = r->next;
++  }
++  
++  release(&kmem.lock);
++
++  // printf("[kalloc.c] freemem %d bytes\n", (int)freeMem);
++
++  return freeMem;
++}
+diff --git a/kernel/proc.c b/kernel/proc.c
+index 130d9ce..a45948f 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -302,6 +302,8 @@ fork(void)
+   // Cause fork to return 0 in the child.
+   np->trapframe->a0 = 0;
+ 
++  np->tracemask = p->tracemask;
++
+   // increment reference counts on open file descriptors.
+   for(i = 0; i < NOFILE; i++)
+     if(p->ofile[i])
+@@ -693,3 +695,20 @@ procdump(void)
+     printf("\n");
+   }
+ }
++
++uint64
++number_of_proccess(void)
++{
++  uint64 nproc = 0;
++  
++  int i = 0;
++  for (i = 0; i < NPROC; i++) {
++    if (proc[i].state != UNUSED) {
++      nproc++;
++    }
++  }
++
++  // printf("[proc.c] nproc %d\n", (int)nproc);
++
++  return nproc;
++}
+diff --git a/kernel/proc.h b/kernel/proc.h
+index d021857..aeb6cf0 100644
+--- a/kernel/proc.h
++++ b/kernel/proc.h
+@@ -91,6 +91,7 @@ struct proc {
+   int killed;                  // If non-zero, have been killed
+   int xstate;                  // Exit status to be returned to parent's wait
+   int pid;                     // Process ID
++  int tracemask;
+ 
+   // wait_lock must be held when using this:
+   struct proc *parent;         // Parent process
+diff --git a/kernel/syscall.c b/kernel/syscall.c
+index ed65409..207c30a 100644
+--- a/kernel/syscall.c
++++ b/kernel/syscall.c
+@@ -101,6 +101,8 @@ extern uint64 sys_unlink(void);
+ extern uint64 sys_link(void);
+ extern uint64 sys_mkdir(void);
+ extern uint64 sys_close(void);
++extern uint64 sys_trace(void);
++extern uint64 sys_sysinfo(void);
+ 
+ // An array mapping syscall numbers from syscall.h
+ // to the function that handles the system call.
+@@ -126,14 +128,43 @@ static uint64 (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
++[SYS_trace]   sys_trace,
++[SYS_sysinfo] sys_sysinfo,
+ };
+ 
++char* syscallName[] = {
++[SYS_fork]    "fork",
++[SYS_exit]    "exit",
++[SYS_wait]    "wait",
++[SYS_pipe]    "pipe",
++[SYS_read]    "read",
++[SYS_kill]    "kill",
++[SYS_exec]    "exec",
++[SYS_fstat]   "fstat",
++[SYS_chdir]   "chdir",
++[SYS_dup]     "dup",
++[SYS_getpid]  "getpid",
++[SYS_sbrk]    "sbrk",
++[SYS_sleep]   "sleep",
++[SYS_uptime]  "uptime",
++[SYS_open]    "open",
++[SYS_write]   "write",
++[SYS_mknod]   "mknod",
++[SYS_unlink]  "unlink",
++[SYS_link]    "link",
++[SYS_mkdir]   "mkdir",
++[SYS_close]   "close",
++[SYS_trace]   "trace",
++[SYS_sysinfo] "sysinfo",
++};
++
++
+ void
+ syscall(void)
+ {
+   int num;
+   struct proc *p = myproc();
+-
++   //num = * (int *) 0;
+   num = p->trapframe->a7;
+   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
+     // Use num to lookup the system call function for num, call it,
+@@ -144,4 +175,9 @@ syscall(void)
+             p->pid, p->name, num);
+     p->trapframe->a0 = -1;
+   }
++
++  if (p->tracemask >> num) {
++    printf("%d: syscall %s -> %ld\n", p->pid, syscallName[num], p->trapframe->a0);
++  }
++
+ }
+diff --git a/kernel/syscall.h b/kernel/syscall.h
+index bc5f356..0dfedc7 100644
+--- a/kernel/syscall.h
++++ b/kernel/syscall.h
+@@ -20,3 +20,5 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_trace  22
++#define SYS_sysinfo 23
+diff --git a/kernel/sysproc.c b/kernel/sysproc.c
+index 3b4d5bd..52f8a05 100644
+--- a/kernel/sysproc.c
++++ b/kernel/sysproc.c
+@@ -5,6 +5,7 @@
+ #include "memlayout.h"
+ #include "spinlock.h"
+ #include "proc.h"
++#include "sysinfo.h"
+ 
+ uint64
+ sys_exit(void)
+@@ -91,3 +92,36 @@ sys_uptime(void)
+   release(&tickslock);
+   return xticks;
+ }
++
++uint64
++sys_trace(void) {
++
++  int n;
++  argint(0, &n);
++
++  if (n < 0)
++    return -1;
++
++  myproc()->tracemask = n;
++
++  return 0;
++}
++
++
++ uint64
++ sys_sysinfo(void)
++ {
++    struct sysinfo _sysinfo;
++
++    _sysinfo.freemem = free_memory();
++    _sysinfo.nproc = number_of_proccess();
++
++    uint64 addr;
++    argaddr(0, &addr);
++
++    if (copyout(myproc()->pagetable, addr, (char *)&_sysinfo, sizeof(_sysinfo)) < 0) {
++        return -1; 
++    }
++
++    return 0;
++ }
+diff --git a/user/user.h b/user/user.h
+index f16fe27..daa8ef3 100644
+--- a/user/user.h
++++ b/user/user.h
+@@ -22,6 +22,10 @@ int getpid(void);
+ char* sbrk(int);
+ int sleep(int);
+ int uptime(void);
++int trace(int);
++
++struct sysinfo;
++int sysinfo(struct sysinfo *);
+ 
+ // ulib.c
+ int stat(const char*, struct stat*);
+diff --git a/user/usys.pl b/user/usys.pl
+index 01e426e..bc109fd 100755
+--- a/user/usys.pl
++++ b/user/usys.pl
+@@ -36,3 +36,5 @@ entry("getpid");
+ entry("sbrk");
+ entry("sleep");
+ entry("uptime");
++entry("trace");
++entry("sysinfo");
